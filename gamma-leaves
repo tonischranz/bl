@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+
+# Terminal cleanup and reset on exit
+cleanup() {
+    printf "\e[?25h\e[0m\e[2J\e[1;1H"
+    stty echo icanon 2>/dev/null
+    exit 0
+}
+trap cleanup EXIT INT TERM
+
+# Prepare terminal
+stty -echo -icanon min 0 time 0 2>/dev/null
+printf "\e[?25l\e[2J"
+
+LEAF_SYMBOLS=("🙐" "🙑" "🙒" "🙓" "🙔" "🙕" "🙖" "🙗")
+COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+
+SHOW_HELP=0
+NUM_LEAVES=35
+
+get_termsize() {
+    LINES=$(tput lines 2>/dev/null || echo 24)
+    COLUMNS=$(tput cols 2>/dev/null || echo 80)
+}
+get_termsize
+
+# Arrays for active falling leaves
+declare -a L_Y L_X L_CHAR L_COLOR L_DELAY L_COUNTER
+# Associative array to store settled ground grid: FLOOR["x,y"]="color:char"
+declare -A FLOOR
+
+init_leaf() {
+    local i=$1
+    L_Y[$i]=1
+    L_X[$i]=$(( RANDOM % COLUMNS + 1 ))
+    L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+    L_COLOR[$i]=${COLORS[$(( RANDOM % ${#COLORS[@]} ))]}
+    L_DELAY[$i]=$(( (RANDOM % 3) + 2 )) # 2-4 frames speed
+    L_COUNTER[$i]=0
+}
+
+for ((i=0; i<NUM_LEAVES; i++)); do
+    init_leaf $i
+    L_Y[$i]=$(( RANDOM % (LINES / 2) + 1 )) # Stagger initial spawn
+done
+
+draw_help() {
+    local box_w=34 box_h=7
+    local start_y=$(( (LINES - box_h) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - box_w) / 2 + 1 ))
+
+    printf "\e[1;37;\e[44m"
+    for ((h=0; h<box_h; h++)); do
+        printf "\e[%d;%dH%-${box_w}s" $((start_y + h)) $start_x " "
+    done
+    printf "\e[%d;%dH+--- Falling Leaves Help ---+" $((start_y)) $start_x
+    printf "\e[%d;%dH|                            |" $((start_y + 1)) $start_x
+    printf "\e[%d;%dH|   h : Toggle Help Panel    |" $((start_y + 2)) $start_x
+    printf "\e[%d;%dH|   q : Quit Program         |" $((start_y + 3)) $start_x
+    printf "\e[%d;%dH|                            |" $((start_y + 4)) $start_x
+    printf "\e[%d;%dH+----------------------------+" $((start_y + 5)) $start_x
+    printf "\e[0m"
+}
+
+sweep_col=1
+frame_count=0
+
+# Main Animation Loop
+while true; do
+    get_termsize
+    (( frame_count++ ))
+
+    # Key input handling
+    read -t 0.04 -n 1 key 2>/dev/null
+    case "$key" in
+        q|Q) break ;;
+        h|H) 
+            SHOW_HELP=$(( 1 - SHOW_HELP ))
+            printf "\e[2J"
+            # Redraw active floor after screen clear
+            for key in "${!FLOOR[@]}"; do
+                IFS=',' read -r fx fy <<< "$key"
+                IFS=':' read -r fcol fchar <<< "${FLOOR[$key]}"
+                printf "\e[%d;%dH%b%s\e[0m" $fy $fx "$fcol" "$fchar"
+            done
+            ;;
+    esac
+
+    # --- 1. PERIODIC FLOOR CLEANUP & GRAVITY SETTLING ---
+    # Every 3 frames, clear one column tile off the very bottom row
+    if (( frame_count % 3 == 0 )); then
+        if [[ -n "${FLOOR["$sweep_col,$LINES"]}" ]]; then
+            unset FLOOR["$sweep_col,$LINES"]
+            printf "\e[%d;%dH " $LINES $sweep_col
+
+            # Drop settled stack directly above down by 1 tile
+            for (( row=LINES-1; row>=1; row-- )); do
+                if [[ -n "${FLOOR["$sweep_col,$row"]}" ]]; then
+                    val="${FLOOR["$sweep_col,$row"]}"
+                    unset FLOOR["$sweep_col,$row"]
+                    printf "\e[%d;%dH " $row $sweep_col
+                    
+                    target_row=$(( row + 1 ))
+                    FLOOR["$sweep_col,$target_row"]="$val"
+                    IFS=':' read -r fcol fchar <<< "$val"
+                    printf "\e[%d;%dH%b%s\e[0m" $target_row $sweep_col "$fcol" "$fchar"
+                fi
+            done
+        fi
+        
+        # Advance sweep pointer across bottom
+        (( sweep_col++ ))
+        if (( sweep_col > COLUMNS )); then sweep_col=1; fi
+    fi
+
+    # --- 2. UPDATE ACTIVE FALLING LEAVES ---
+    for ((i=0; i<NUM_LEAVES; i++)); do
+        (( L_COUNTER[i]++ ))
+        if (( L_COUNTER[i] < L_DELAY[i] )); then continue; fi
+        L_COUNTER[$i]=0
+
+        old_y=${L_Y[$i]}
+        old_x=${L_X[$i]}
+
+        # Clear old position
+        printf "\e[%d;%dH " $old_y $old_x
+
+        wind=$(( (RANDOM % 3) - 1 ))
+        new_y=$(( old_y + 1 ))
+        new_x=$(( old_x + wind ))
+
+        # Bounds check horizontal drift
+        if (( new_x < 1 )); then new_x=1; fi
+        if (( new_x > COLUMNS )); then new_x=$COLUMNS; fi
+
+        # Collision check with accumulated floor leaves or bottom row
+        if (( new_y >= LINES )) || [[ -n "${FLOOR["$new_x,$new_y"]}" ]]; then
+            # Save leaf into ground floor array and render permanently
+            FLOOR["$old_x,$old_y"]="${L_COLOR[$i]}:${L_CHAR[$i]}"
+            printf "\e[%d;%dH%b%s\e[0m" $old_y $old_x "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            
+            # Respawn new leaf at top
+            init_leaf $i
+        else
+            L_Y[$i]=$new_y
+            L_X[$i]=$new_x
+            L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+            printf "\e[%d;%dH%b%s\e[0m" ${L_Y[$i]} ${L_X[$i]} "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+        fi
+    done
+
+    if (( SHOW_HELP )); then draw_help; fi
+done
