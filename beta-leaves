@@ -19,6 +19,7 @@ COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
 # State variables
 SHOW_HELP=0
 NUM_LEAVES=25
+declare -a L_Y L_X L_CHAR L_COLOR L_DELAY L_COUNTER
 
 # Get terminal dimensions
 get_termsize() {
@@ -37,6 +38,8 @@ init_leaf() {
     L_X[$i]=$(( RANDOM % COLUMNS + 1 ))
     L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
     L_COLOR[$i]=${COLORS[$(( RANDOM % ${#COLORS[@]} ))]}
+    L_DELAY[$i]=$(( (RANDOM % 3) + 2 )) # Waits 2, 3, or 4 frames per move
+    L_COUNTER[$i]=0
 }
 
 # Initialize all leaves
@@ -85,20 +88,29 @@ while true; do
 
     # Update and move leaves
     for ((i=0; i<NUM_LEAVES; i++)); do
+        # Increment frame counter for this leaf
+        (( L_COUNTER[i]++ ))
+
+        # Skip position updates until counter hits the delay threshold
+        if (( L_COUNTER[i] < L_DELAY[i] )); then
+            continue
+        fi
+
+        # Reset counter for next move
+        L_COUNTER[$i]=0
+
         old_y=${L_Y[$i]}
         old_x=${L_X[$i]}
 
-        # 1. Erase current leaf position
+        # Erase previous position
         printf "\e[%d;%dH " $old_y $old_x
 
-        # Calculate new Y position (falling down)
+        # Calculate next movement
         new_y=$(( old_y + 1 ))
-
-        # Calculate new X position (wind drift: -1, 0, or 1)
         wind=$(( (RANDOM % 3) - 1 ))
         new_x=$(( old_x + wind ))
 
-        # Screen boundaries check (respawn at top if hitting bottom or sides)
+        # Check boundaries
         if (( new_y >= LINES || new_x < 1 || new_x > COLUMNS )); then
             init_leaf $i
             L_Y[$i]=1
@@ -106,11 +118,10 @@ while true; do
         else
             L_Y[$i]=$new_y
             L_X[$i]=$new_x
-            # Rotate leaf icon slightly as it falls
             L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
         fi
 
-        # 2. Draw leaf at new position using cursor move code \e[Y;XH
+        # Draw at new position
         printf "\e[%d;%dH%b%s\e[0m" ${L_Y[$i]} ${L_X[$i]} "${L_COLOR[$i]}" "${L_CHAR[$i]}"
     done
 
