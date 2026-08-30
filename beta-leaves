@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+# Terminal cleanup and reset on exit
+cleanup() {
+    printf "\e[?25h\e[0m\e[2J\e[1;1H" # Restore cursor, clear screen
+    stty echo icanon 2>/dev/null
+    exit 0
+}
+trap cleanup EXIT INT TERM
+
+# Ensure terminal accepts non-blocking input and hide cursor
+stty -echo -icanon min 0 time 0 2>/dev/null
+printf "\e[?25l"
+
+# Falling Leaf Symbols (U+1F650 to U+1F657)
+LEAF_SYMBOLS=("🙐" "🙑" "🙒" "🙓" "🙔" "🙕" "🙖" "🙗")
+COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+
+# State variables
+SHOW_HELP=0
+NUM_LEAVES=25
+
+# Get terminal dimensions
+get_termsize() {
+    LINES=$(tput lines 2>/dev/null || echo 24)
+    COLUMNS=$(tput cols 2>/dev/null || echo 80)
+}
+get_termsize
+
+# Leaf properties (Arrays)
+declare -a L_Y L_X L_CHAR L_COLOR
+
+# Initialize a leaf at a random position
+init_leaf() {
+    local i=$1
+    L_Y[$i]=$(( RANDOM % LINES + 1 ))
+    L_X[$i]=$(( RANDOM % COLUMNS + 1 ))
+    L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+    L_COLOR[$i]=${COLORS[$(( RANDOM % ${#COLORS[@]} ))]}
+}
+
+# Initialize all leaves
+for ((i=0; i<NUM_LEAVES; i++)); do
+    init_leaf $i
+done
+
+# Draw help panel overlay
+draw_help() {
+    local box_w=34
+    local box_h=7
+    local start_y=$(( (LINES - box_h) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - box_w) / 2 + 1 ))
+
+    printf "\e[1;37;\e[44m" # Bold white on blue
+    for ((h=0; h<box_h; h++)); do
+        printf "\e[%d;%dH" $((start_y + h)) $start_x
+        printf "%-${box_w}s" " "
+    done
+
+    printf "\e[%d;%dH+--- Falling Leaves Help ---+" $((start_y)) $start_x
+    printf "\e[%d;%dH|                            |" $((start_y + 1)) $start_x
+    printf "\e[%d;%dH|   h : Toggle Help Panel    |" $((start_y + 2)) $start_x
+    printf "\e[%d;%dH|   q : Quit Program         |" $((start_y + 3)) $start_x
+    printf "\e[%d;%dH|                            |" $((start_y + 4)) $start_x
+    printf "\e[%d;%dH+----------------------------+" $((start_y + 5)) $start_x
+    printf "\e[0m"
+}
+
+# Clear initial screen
+printf "\e[2J"
+
+# Main Animation Loop
+while true; do
+    get_termsize
+
+    # Process keypresses
+    read -t 0.05 -n 1 key 2>/dev/null
+    case "$key" in
+        q|Q) break ;;
+        h|H) 
+            SHOW_HELP=$(( 1 - SHOW_HELP ))
+            printf "\e[2J" # Clear residual overlay on toggle
+            ;;
+    esac
+
+    # Update and move leaves
+    for ((i=0; i<NUM_LEAVES; i++)); do
+        old_y=${L_Y[$i]}
+        old_x=${L_X[$i]}
+
+        # 1. Erase current leaf position
+        printf "\e[%d;%dH " $old_y $old_x
+
+        # Calculate new Y position (falling down)
+        new_y=$(( old_y + 1 ))
+
+        # Calculate new X position (wind drift: -1, 0, or 1)
+        wind=$(( (RANDOM % 3) - 1 ))
+        new_x=$(( old_x + wind ))
+
+        # Screen boundaries check (respawn at top if hitting bottom or sides)
+        if (( new_y >= LINES || new_x < 1 || new_x > COLUMNS )); then
+            init_leaf $i
+            L_Y[$i]=1
+            L_X[$i]=$(( RANDOM % COLUMNS + 1 ))
+        else
+            L_Y[$i]=$new_y
+            L_X[$i]=$new_x
+            # Rotate leaf icon slightly as it falls
+            L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+        fi
+
+        # 2. Draw leaf at new position using cursor move code \e[Y;XH
+        printf "\e[%d;%dH%b%s\e[0m" ${L_Y[$i]} ${L_X[$i]} "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+    done
+
+    # Draw help box on top if enabled
+    if (( SHOW_HELP )); then
+        draw_help
+    fi
+
+    # Flush output and control animation frame rate (~15 FPS)
+    sleep 0.07
+done
