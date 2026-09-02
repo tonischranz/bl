@@ -61,12 +61,12 @@ draw_help() {
     done
 
     printf "\e[%d;%dH                                  " $((start_y - 1)) $start_x
-    printf "\e[%d;%dH  +-- Falling Leaves Conundrum +" $((start_y)) $start_x
+    printf "\e[%d;%dH  ⎧ -- homeless leaves ------- ⎫" $((start_y)) $start_x
     printf "\e[%d;%dH  |                            |" $((start_y + 1)) $start_x
-    printf "\e[%d;%dH  | h : hide help              |" $((start_y + 2)) $start_x
-    printf "\e[%d;%dH  | q : quit                   |" $((start_y + 3)) $start_x
+    printf "\e[%d;%dH  ⎨ h : hide help     ⎲ ⎾ ⎺ ⎺⏋ |" $((start_y + 2)) $start_x
+    printf "\e[%d;%dH  | q : quit          ⎳ ⎷ 𐀵𐀛   |" $((start_y + 3)) $start_x
     printf "\e[%d;%dH  |                            |" $((start_y + 4)) $start_x
-    printf "\e[%d;%dH  +----------------------------+" $((start_y + 5)) $start_x
+    printf "\e[%d;%dH  ⎩ ⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵⎵ ⎭" $((start_y + 5)) $start_x
     printf "\e[0m"
 }
 
