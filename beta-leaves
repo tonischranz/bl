@@ -14,11 +14,11 @@ printf "\e[?25l"
 
 # Falling Leaf Symbols (U+1F650 to U+1F657)
 LEAF_SYMBOLS=("🙐" "🙑" "🙒" "🙓" "🙔" "🙕" "🙖" "🙗")
-COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+COLORS=("\e[34m" "\e[33m" "\e[32m" "\e[35m" "\e[92m" "\e[93m")
 
 # State variables
-SHOW_HELP=0
-NUM_LEAVES=25
+SHOW_HELP=1
+NUM_LEAVES=10
 declare -a L_Y L_X L_CHAR L_COLOR L_DELAY L_COUNTER
 
 # Get terminal dimensions
@@ -60,12 +60,13 @@ draw_help() {
         printf "%-${box_w}s" " "
     done
 
-    printf "\e[%d;%dH+--- Falling Leaves Help ---+" $((start_y)) $start_x
-    printf "\e[%d;%dH|                            |" $((start_y + 1)) $start_x
-    printf "\e[%d;%dH|   h : Toggle Help Panel    |" $((start_y + 2)) $start_x
-    printf "\e[%d;%dH|   q : Quit Program         |" $((start_y + 3)) $start_x
-    printf "\e[%d;%dH|                            |" $((start_y + 4)) $start_x
-    printf "\e[%d;%dH+----------------------------+" $((start_y + 5)) $start_x
+    printf "\e[%d;%dH                                  " $((start_y - 1)) $start_x
+    printf "\e[%d;%dH  +-- Falling Leaves Conundrum +" $((start_y)) $start_x
+    printf "\e[%d;%dH  |                            |" $((start_y + 1)) $start_x
+    printf "\e[%d;%dH  | h : hide help              |" $((start_y + 2)) $start_x
+    printf "\e[%d;%dH  | q : quit                   |" $((start_y + 3)) $start_x
+    printf "\e[%d;%dH  |                            |" $((start_y + 4)) $start_x
+    printf "\e[%d;%dH  +----------------------------+" $((start_y + 5)) $start_x
     printf "\e[0m"
 }
 
