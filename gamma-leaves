@@ -5,9 +5,10 @@ cleanup() {
     printf "\e[?1000l\e[?1006l"
     printf "\e[?25h\e[0m\e[2J\e[1;1H"
     stty echo icanon 2>/dev/null
-    exit 0
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Prepare terminal
 stty -echo -icanon min 0 time 0 2>/dev/null
@@ -18,12 +19,23 @@ COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
 
 SHOW_HELP=0
 NUM_LEAVES=35
+MENU_WIDTH=34
+MENU_HEIGHT=7
 
 get_termsize() {
     LINES=$(tput lines 2>/dev/null || echo 24)
     COLUMNS=$(tput cols 2>/dev/null || echo 80)
 }
 get_termsize
+
+menu_contains() {
+    local x=$1 y=$2
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
+
+    (( SHOW_HELP && y >= start_y && y < start_y + MENU_HEIGHT &&
+        x >= start_x && x < start_x + MENU_WIDTH ))
+}
 
 # Arrays for active falling leaves
 declare -a L_Y L_X L_CHAR L_COLOR L_DELAY L_COUNTER L_ACTIVE
@@ -47,21 +59,21 @@ for ((i=0; i<NUM_LEAVES; i++)); do
 done
 
 draw_help() {
-    local box_w=34 box_h=7
-    local start_y=$(( (LINES - box_h) / 2 + 1 ))
-    local start_x=$(( (COLUMNS - box_w) / 2 + 1 ))
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
 
     printf "\e[1;37;\e[44m"
-    for ((h=0; h<box_h; h++)); do
-        printf "\e[%d;%dH%-${box_w}s" $((start_y + h)) $start_x " "
+    for ((h=0; h<MENU_HEIGHT; h++)); do
+        printf "\e[%d;%dH%-${MENU_WIDTH}s" $((start_y + h)) $start_x " "
     done
-    printf "\e[%d;%dH+--- Falling Leaves Help ---+" $((start_y)) $start_x
-    printf "\e[%d;%dH|                            |" $((start_y + 1)) $start_x
-    printf "\e[%d;%dH|   Click: Remove a leaf     |" $((start_y + 2)) $start_x
-    printf "\e[%d;%dH|   h : Toggle Help Panel    |" $((start_y + 3)) $start_x
-    printf "\e[%d;%dH|   q : Quit Program         |" $((start_y + 4)) $start_x
-    printf "\e[%d;%dH|                            |" $((start_y + 5)) $start_x
-    printf "\e[%d;%dH+----------------------------+" $((start_y + 6)) $start_x
+    printf "\e[%d;%dH +--- Falling Leaves Help  ---+ " $((start_y)) $start_x
+    printf "\e[%d;%dH |                            | " $((start_y + 1)) $start_x
+    printf "\e[%d;%dH | h/? : Help                 | " $((start_y + 2)) $start_x
+    printf "\e[%d;%dH |   q : Quit                 | " $((start_y + 3)) $start_x
+    printf "\e[%d;%dH |   t : Terminal             | " $((start_y + 4)) $start_x
+    printf "\e[%d;%dH |   v : Vim                  | " $((start_y + 5)) $start_x
+    # printf "\e[%d;%dH|                            | " $((start_y + 7)) $start_x
+    printf "\e[%d;%dH +----------------------------+   " $((start_y + 6)) $start_x
     printf "\e[0m"
 }
 
@@ -111,20 +123,39 @@ while true; do
             mouse_x=${BASH_REMATCH[2]}
             mouse_y=${BASH_REMATCH[3]}
             if (( mouse_button == 0 )); then
-                remove_leaf_at "$mouse_x" "$mouse_y"
+                if menu_contains "$mouse_x" "$mouse_y"; then
+                    menu_start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+                    case "$mouse_y" in
+                        $((menu_start_y + 2))) key=h ;;
+                        $((menu_start_y + 3))) key=q ;;
+                        $((menu_start_y + 4))) key=t ;;
+                        $((menu_start_y + 5))) key=v ;;
+                    esac
+                else
+                    remove_leaf_at "$mouse_x" "$mouse_y"
+                fi
             fi
         fi
     fi
     case "$key" in
         q|Q) break ;;
-        h|H) 
+        t|T) exit 2 ;;
+        v) exit 3 ;;
+        h|H|?)
             SHOW_HELP=$(( 1 - SHOW_HELP ))
             printf "\e[2J"
             # Redraw active floor after screen clear
             for key in "${!FLOOR[@]}"; do
                 IFS=',' read -r fx fy <<< "$key"
                 IFS=':' read -r fcol fchar <<< "${FLOOR[$key]}"
-                printf "\e[%d;%dH%b%s\e[0m" $fy $fx "$fcol" "$fchar"
+                if ! menu_contains "$fx" "$fy"; then
+                    printf "\e[%d;%dH%b%s\e[0m" $fy $fx "$fcol" "$fchar"
+                fi
+            done
+            for ((i=0; i<NUM_LEAVES; i++)); do
+                if (( L_ACTIVE[i] )) && ! menu_contains "${L_X[$i]}" "${L_Y[$i]}"; then
+                    printf "\e[%d;%dH%b%s\e[0m" "${L_Y[$i]}" "${L_X[$i]}" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+                fi
             done
             ;;
     esac
@@ -134,19 +165,25 @@ while true; do
     if (( frame_count % 3 == 0 )); then
         if [[ -n "${FLOOR["$sweep_col,$LINES"]}" ]]; then
             unset FLOOR["$sweep_col,$LINES"]
-            printf "\e[%d;%dH " $LINES $sweep_col
+            if ! menu_contains "$sweep_col" "$LINES"; then
+                printf "\e[%d;%dH " $LINES $sweep_col
+            fi
 
             # Drop settled stack directly above down by 1 tile
             for (( row=LINES-1; row>=1; row-- )); do
                 if [[ -n "${FLOOR["$sweep_col,$row"]}" ]]; then
                     val="${FLOOR["$sweep_col,$row"]}"
                     unset FLOOR["$sweep_col,$row"]
-                    printf "\e[%d;%dH " $row $sweep_col
+                    if ! menu_contains "$sweep_col" "$row"; then
+                        printf "\e[%d;%dH " $row $sweep_col
+                    fi
                     
                     target_row=$(( row + 1 ))
                     FLOOR["$sweep_col,$target_row"]="$val"
                     IFS=':' read -r fcol fchar <<< "$val"
-                    printf "\e[%d;%dH%b%s\e[0m" $target_row $sweep_col "$fcol" "$fchar"
+                    if ! menu_contains "$sweep_col" "$target_row"; then
+                        printf "\e[%d;%dH%b%s\e[0m" $target_row $sweep_col "$fcol" "$fchar"
+                    fi
                 fi
             done
         fi
@@ -167,7 +204,9 @@ while true; do
         old_x=${L_X[$i]}
 
         # Clear old position
-        printf "\e[%d;%dH " $old_y $old_x
+        if ! menu_contains "$old_x" "$old_y"; then
+            printf "\e[%d;%dH " "$old_y" "$old_x"
+        fi
 
 
         if [ $((RANDOM % 4 )) == 0 ]; then
@@ -188,7 +227,9 @@ while true; do
         if (( new_y >= LINES )) || [[ -n "${FLOOR["$new_x,$new_y"]}" ]]; then
             # Save leaf into ground floor array and render permanently
             FLOOR["$old_x,$old_y"]="${L_COLOR[$i]}:${L_CHAR[$i]}"
-            printf "\e[%d;%dH%b%s\e[0m" $old_y $old_x "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            if ! menu_contains "$old_x" "$old_y"; then
+                printf "\e[%d;%dH%b%s\e[0m" "$old_y" "$old_x" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            fi
             
             # Respawn new leaf at top
             init_leaf $i
@@ -196,7 +237,9 @@ while true; do
             L_Y[$i]=$new_y
             L_X[$i]=$new_x
             L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
-            printf "\e[%d;%dH%b%s\e[0m" ${L_Y[$i]} ${L_X[$i]} "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            if ! menu_contains "${L_X[$i]}" "${L_Y[$i]}"; then
+                printf "\e[%d;%dH%b%s\e[0m" "${L_Y[$i]}" "${L_X[$i]}" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            fi
         fi
     done
 
