@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+
+# Terminal cleanup and reset on exit
+cleanup() {
+    printf "\e[?1000l\e[?1006l"
+    printf "\e[?25h\e[0m\e[2J\e[1;1H"
+    stty echo icanon 2>/dev/null
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Prepare terminal
+stty -echo -icanon min 0 time 0 2>/dev/null
+printf "\e[?1000h\e[?1006h\e[?25l\e[2J"
+
+LEAF_SYMBOLS=("🙐" "🙑" "🙒" "🙓" "🙔" "🙕" "🙖" "🙗")
+COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+
+SHOW_HELP=0
+NUM_LEAVES=35
+MENU_WIDTH=34
+MENU_HEIGHT=7
+
+get_termsize() {
+    LINES=$(tput lines 2>/dev/null || echo 24)
+    COLUMNS=$(tput cols 2>/dev/null || echo 80)
+}
+get_termsize
+
+menu_contains() {
+    local x=$1 y=$2
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
+
+    (( SHOW_HELP && y >= start_y && y < start_y + MENU_HEIGHT &&
+        x >= start_x && x < start_x + MENU_WIDTH ))
+}
+
+# Arrays for active falling leaves
+declare -a L_Y L_X L_CHAR L_COLOR L_DELAY L_COUNTER L_ACTIVE
+# Associative array to store settled ground grid: FLOOR["x,y"]="color:char"
+declare -A FLOOR
+
+init_leaf() {
+    local i=$1
+    L_Y[$i]=1
+    L_X[$i]=$(( RANDOM % COLUMNS + 1 ))
+    L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+    L_COLOR[$i]=${COLORS[$(( RANDOM % ${#COLORS[@]} ))]}
+    L_DELAY[$i]=$(( (RANDOM % 3) + 2 )) # 2-4 frames speed
+    L_COUNTER[$i]=0
+    L_ACTIVE[$i]=1
+}
+
+for ((i=0; i<NUM_LEAVES; i++)); do
+    init_leaf $i
+    L_Y[$i]=$(( RANDOM % (LINES / 2) + 1 )) # Stagger initial spawn
+done
+
+draw_help() {
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
+
+    printf "\e[1;32;\e[47m"
+    for ((h=0; h<MENU_HEIGHT; h++)); do
+        printf "\e[%d;%dH%-${MENU_WIDTH}s" $((start_y + h)) $start_x " "
+    done
+    printf "\e[%d;%dH  +--- Falling Leaves Help  ---+ " $((start_y)) $start_x
+    printf "\e[%d;%dH  |   ? : Ask a Question       | " $((start_y + 1)) $start_x
+    printf "\e[%d;%dH  |   h : Help                 | " $((start_y + 2)) $start_x
+    printf "\e[%d;%dH  |   q : Quit                 | " $((start_y + 3)) $start_x
+    printf "\e[%d;%dH  |   t : Terminal             | " $((start_y + 4)) $start_x
+    printf "\e[%d;%dH  |   v : Vim                  | " $((start_y + 5)) $start_x
+    # printf "\e[%d;%dH|                            | " $((start_y + 7)) $start_x
+    printf "\e[%d;%dH  +----------------------------+  " $((start_y + 6)) $start_x
+    printf "\e[0m"
+}
+
+redraw_scene() {
+    printf "\e[2J"
+    for key in "${!FLOOR[@]}"; do
+        IFS=',' read -r fx fy <<< "$key"
+        IFS=':' read -r fcol fchar <<< "${FLOOR[$key]}"
+        if ! menu_contains "$fx" "$fy"; then
+            printf "\e[%d;%dH%b%s\e[0m" "$fy" "$fx" "$fcol" "$fchar"
+        fi
+    done
+    for ((i=0; i<NUM_LEAVES; i++)); do
+        if (( L_ACTIVE[i] )) && ! menu_contains "${L_X[$i]}" "${L_Y[$i]}"; then
+            printf "\e[%d;%dH%b%s\e[0m" "${L_Y[$i]}" "${L_X[$i]}" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+        fi
+    done
+    if (( SHOW_HELP )); then draw_help; fi
+}
+
+ask_question() {
+    local question question_json
+
+    printf "\e[?25h\e[0m\e[2J\e[H"
+    printf 'This will send only the text you enter to https://tsd.wtf/q.\n'
+    printf 'No hostname, username, or other system information is included in the JSON body.\n'
+    printf 'The server can still see your IP address from the network connection.\n'
+    printf 'Press Enter on an empty prompt to cancel.\n\n'
+
+    stty echo icanon
+    if ! IFS= read -r -p "Question: " question; then
+        printf '\nCould not read the question.\n'
+    elif [[ -z $question ]]; then
+        printf 'Cancelled.\n'
+    elif ! command -v jq >/dev/null 2>&1; then
+        printf 'Cannot send the question: jq is required to encode the JSON body.\n'
+    elif question_json=$(jq -cn --arg text "$question" '{text: $text}'); then
+        if curl --fail --silent --show-error --output /dev/null \
+            --header 'Content-Type: application/json' \
+            --data-binary "$question_json" \
+            https://tsd.wtf/q; then
+            printf 'Question sent.\n'
+        else
+            printf 'Question was not sent.\n'
+        fi
+    else
+        printf 'Cannot send the question: failed to encode the JSON body.\n'
+    fi
+
+    printf '\nPress Enter to return to the animation.'
+    IFS= read -r _
+    stty -echo -icanon min 0 time 0 2>/dev/null
+    redraw_scene
+}
+
+remove_leaf_at() {
+    local mouse_x=$1 mouse_y=$2 i leaf_x floor_key floor_x floor_y
+
+    for ((i=0; i<NUM_LEAVES; i++)); do
+        (( L_ACTIVE[i] )) || continue
+        leaf_x=${L_X[$i]}
+        if (( L_Y[i] == mouse_y && mouse_x >= leaf_x && mouse_x <= leaf_x + 1 )); then
+            L_ACTIVE[$i]=0
+            printf "\e[%d;%dH  " "$mouse_y" "$leaf_x"
+            return
+        fi
+    done
+
+    for floor_key in "${!FLOOR[@]}"; do
+        IFS=',' read -r floor_x floor_y <<< "$floor_key"
+        if (( floor_y == mouse_y && mouse_x >= floor_x && mouse_x <= floor_x + 1 )); then
+            unset 'FLOOR[$floor_key]'
+            printf "\e[%d;%dH  " "$floor_y" "$floor_x"
+            return
+        fi
+    done
+}
+
+sweep_col=1
+frame_count=0
+
+# Main Animation Loop
+while true; do
+    get_termsize
+    (( frame_count++ ))
+
+    # Key input handling
+    key=
+    read -t 0.04 -n 1 key 2>/dev/null
+    if [[ $key == $'\e' ]]; then
+        mouse_sequence=
+        mouse_regex='^\[<([0-9]+);([0-9]+);([0-9]+)M$'
+        while IFS= read -r -s -t 0.01 -N 1 mouse_char 2>/dev/null; do
+            mouse_sequence+=$mouse_char
+            [[ $mouse_char == M || $mouse_char == m ]] && break
+        done
+        if [[ $mouse_sequence =~ $mouse_regex ]]; then
+            mouse_button=${BASH_REMATCH[1]}
+            mouse_x=${BASH_REMATCH[2]}
+            mouse_y=${BASH_REMATCH[3]}
+            if (( mouse_button == 0 )); then
+                if menu_contains "$mouse_x" "$mouse_y"; then
+                    menu_start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+                    case "$mouse_y" in
+                        $((menu_start_y + 2))) key=h ;;
+                        $((menu_start_y + 3))) key=q ;;
+                        $((menu_start_y + 4))) key=t ;;
+                        $((menu_start_y + 5))) key=v ;;
+                    esac
+                else
+                    remove_leaf_at "$mouse_x" "$mouse_y"
+                fi
+            fi
+        fi
+    fi
+    case "$key" in
+        q|Q) break ;;
+        t|T) exit 2 ;;
+        v) exit 3 ;;
+        ?) ask_question ;;
+        h|H)
+            SHOW_HELP=$(( 1 - SHOW_HELP ))
+            redraw_scene
+            ;;
+    esac
+
+    # --- 1. PERIODIC FLOOR CLEANUP & GRAVITY SETTLING ---
+    # Every 3 frames, clear one column tile off the very bottom row
+    if (( frame_count % 3 == 0 )); then
+        if [[ -n "${FLOOR["$sweep_col,$LINES"]}" ]]; then
+            unset FLOOR["$sweep_col,$LINES"]
+            if ! menu_contains "$sweep_col" "$LINES"; then
+                printf "\e[%d;%dH " $LINES $sweep_col
+            fi
+
+            # Drop settled stack directly above down by 1 tile
+            for (( row=LINES-1; row>=1; row-- )); do
+                if [[ -n "${FLOOR["$sweep_col,$row"]}" ]]; then
+                    val="${FLOOR["$sweep_col,$row"]}"
+                    unset FLOOR["$sweep_col,$row"]
+                    if ! menu_contains "$sweep_col" "$row"; then
+                        printf "\e[%d;%dH " $row $sweep_col
+                    fi
+                    
+                    target_row=$(( row + 1 ))
+                    FLOOR["$sweep_col,$target_row"]="$val"
+                    IFS=':' read -r fcol fchar <<< "$val"
+                    if ! menu_contains "$sweep_col" "$target_row"; then
+                        printf "\e[%d;%dH%b%s\e[0m" $target_row $sweep_col "$fcol" "$fchar"
+                    fi
+                fi
+            done
+        fi
+        
+        # Advance sweep pointer across bottom
+        (( sweep_col++ ))
+        if (( sweep_col > COLUMNS )); then sweep_col=1; fi
+    fi
+
+    # --- 2. UPDATE ACTIVE FALLING LEAVES ---
+    for ((i=0; i<NUM_LEAVES; i++)); do
+        (( L_ACTIVE[i] )) || continue
+        (( L_COUNTER[i]++ ))
+        if (( L_COUNTER[i] < L_DELAY[i] )); then continue; fi
+        L_COUNTER[$i]=0
+
+        old_y=${L_Y[$i]}
+        old_x=${L_X[$i]}
+
+        # Clear old position
+        if ! menu_contains "$old_x" "$old_y"; then
+            printf "\e[%d;%dH " "$old_y" "$old_x"
+        fi
+
+
+        if [ $((RANDOM % 4 )) == 0 ]; then
+            new_y=$(( old_y + 1 ))
+        else
+            new_y=$old_y
+        fi
+
+        wind=$(( (RANDOM % 3) - 1 ))
+        
+        new_x=$(( old_x + wind ))
+
+        # Bounds check horizontal drift
+        if (( new_x < 1 )); then new_x=1; fi
+        if (( new_x > COLUMNS )); then new_x=$COLUMNS; fi
+
+        # Collision check with accumulated floor leaves or bottom row
+        if (( new_y >= LINES )) || [[ -n "${FLOOR["$new_x,$new_y"]}" ]]; then
+            # Save leaf into ground floor array and render permanently
+            FLOOR["$old_x,$old_y"]="${L_COLOR[$i]}:${L_CHAR[$i]}"
+            if ! menu_contains "$old_x" "$old_y"; then
+                printf "\e[%d;%dH%b%s\e[0m" "$old_y" "$old_x" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            fi
+            
+            # Respawn new leaf at top
+            init_leaf $i
+        else
+            L_Y[$i]=$new_y
+            L_X[$i]=$new_x
+            L_CHAR[$i]=${LEAF_SYMBOLS[$(( RANDOM % ${#LEAF_SYMBOLS[@]} ))]}
+            if ! menu_contains "${L_X[$i]}" "${L_Y[$i]}"; then
+                printf "\e[%d;%dH%b%s\e[0m" "${L_Y[$i]}" "${L_X[$i]}" "${L_COLOR[$i]}" "${L_CHAR[$i]}"
+            fi
+        fi
+    done
+
+    if (( SHOW_HELP )); then draw_help; fi
+done
