@@ -194,7 +194,7 @@ while true; do
         q|Q) break ;;
         t|T) exit 2 ;;
         v) exit 3 ;;
-        ?) ask_question ;;
+        \?) ask_question ;;
         h|H)
             SHOW_HELP=$(( 1 - SHOW_HELP ))
             redraw_scene
