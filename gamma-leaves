@@ -15,7 +15,9 @@ stty -echo -icanon min 0 time 0 2>/dev/null
 printf "\e[?1000h\e[?1006h\e[?25l\e[2J"
 
 LEAF_SYMBOLS=("🙐" "🙑" "🙒" "🙓" "🙔" "🙕" "🙖" "🙗")
-COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+# COLORS=("\e[31m" "\e[33m" "\e[32m" "\e[35m" "\e[91m" "\e[93m")
+COLORS=("\e[38;5;160m" "\e[38;5;202m" "\e[38;5;130m" "\e[38;5;214m" "\e[38;5;142m" "\e[38;5;94m" "\e[38;5;64m")
+#ToDo: "\e[38;5;1m]"
 
 SHOW_HELP=0
 NUM_LEAVES=35
@@ -62,18 +64,20 @@ draw_help() {
     local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
     local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
 
-    printf "\e[1;37;\e[44m"
+    # printf "\e[1;37;\e[44m"
+    printf "\e[38;5;22m"
+    # printf "\e[48;5;17m"
     for ((h=0; h<MENU_HEIGHT; h++)); do
         printf "\e[%d;%dH%-${MENU_WIDTH}s" $((start_y + h)) $start_x " "
     done
-    printf "\e[%d;%dH +--- Falling Leaves Help  ---+ " $((start_y)) $start_x
-    printf "\e[%d;%dH |                            | " $((start_y + 1)) $start_x
-    printf "\e[%d;%dH | h/? : Help                 | " $((start_y + 2)) $start_x
-    printf "\e[%d;%dH |   q : Quit                 | " $((start_y + 3)) $start_x
-    printf "\e[%d;%dH |   t : Terminal             | " $((start_y + 4)) $start_x
-    printf "\e[%d;%dH |   v : Vim                  | " $((start_y + 5)) $start_x
+    printf "\e[%d;%dH  +--- Falling Leaves Help  ---+ " $((start_y)) $start_x
+    printf "\e[%d;%dH  |                            | " $((start_y + 1)) $start_x
+    printf "\e[%d;%dH  | h/? : Help                 | " $((start_y + 2)) $start_x
+    printf "\e[%d;%dH  |   q : Quit                 | " $((start_y + 3)) $start_x
+    printf "\e[%d;%dH  |   t : Terminal             | " $((start_y + 4)) $start_x
+    printf "\e[%d;%dH  |   v : Vim                  | " $((start_y + 5)) $start_x
     # printf "\e[%d;%dH|                            | " $((start_y + 7)) $start_x
-    printf "\e[%d;%dH +----------------------------+   " $((start_y + 6)) $start_x
+    printf "\e[%d;%dH  +----------------------------+  " $((start_y + 6)) $start_x
     printf "\e[0m"
 }
 
