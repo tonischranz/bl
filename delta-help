@@ -123,9 +123,10 @@ ask_question() {
         printf 'Cannot send the question: failed to encode the JSON body.\n'
     fi
 
-    printf '\nPress Enter to return to the animation.'
+    printf '\nPress Enter'
     IFS= read -r _
     stty -echo -icanon min 0 time 0 2>/dev/null
+    printf "\e[?25l"
     redraw_scene
 }
 
