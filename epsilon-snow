@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+
+cleanup() {
+    printf "\e[?1000l\e[?1006l\e[?25h\e[0m\e[2J\e[1;1H"
+    stty echo icanon 2>/dev/null
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+stty -echo -icanon min 0 time 0 2>/dev/null
+printf "\e[?1000h\e[?1006h\e[?25l"
+
+SNOWFLAKES=("❄" "❅" "❆")
+SNOW_COLORS=(255 159 153 117 195)
+BACKGROUND_COLORS=(19 18 17 16 0)
+NUM_FLAKES=35
+MENU_WIDTH=34
+MENU_HEIGHT=7
+SHOW_HELP=0
+
+get_termsize() {
+    LINES=$(tput lines 2>/dev/null || echo 24)
+    COLUMNS=$(tput cols 2>/dev/null || echo 80)
+    (( LINES > 0 )) || LINES=24
+    (( COLUMNS > 0 )) || COLUMNS=80
+}
+get_termsize
+
+background_for_row() {
+    local row=$1 index
+    index=$(( (row - 1) * ${#BACKGROUND_COLORS[@]} / LINES ))
+    (( index >= ${#BACKGROUND_COLORS[@]} )) && index=$((${#BACKGROUND_COLORS[@]} - 1))
+    printf '%s' "${BACKGROUND_COLORS[$index]}"
+}
+
+draw_background() {
+    local row bg
+    for ((row=1; row<=LINES; row++)); do
+        bg=$(background_for_row "$row")
+        printf '\e[%d;1H\e[48;5;%dm%*s\e[0m' "$row" "$bg" "$COLUMNS" ""
+    done
+}
+
+draw_cell() {
+    local x=$1 y=$2 foreground=$3 character=$4 bg
+    (( x < 1 || x > COLUMNS || y < 1 || y > LINES )) && return
+    bg=$(background_for_row "$y")
+    printf '\e[%d;%dH\e[48;5;%dm\e[38;5;%dm%s\e[0m' \
+        "$y" "$x" "$bg" "$foreground" "$character"
+}
+
+menu_contains() {
+    local x=$1 y=$2
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
+    (( SHOW_HELP && y >= start_y && y < start_y + MENU_HEIGHT &&
+        x >= start_x && x < start_x + MENU_WIDTH ))
+}
+
+declare -a F_Y F_X F_CHAR F_COLOR F_DELAY F_COUNTER F_ACTIVE
+declare -A FLOOR
+
+init_flake() {
+    local i=$1
+    F_Y[$i]=1
+    F_X[$i]=$(( RANDOM % COLUMNS + 1 ))
+    F_CHAR[$i]=${SNOWFLAKES[$(( RANDOM % ${#SNOWFLAKES[@]} ))]}
+    F_COLOR[$i]=${SNOW_COLORS[$(( RANDOM % ${#SNOW_COLORS[@]} ))]}
+    F_DELAY[$i]=$(( RANDOM % 3 + 2 ))
+    F_COUNTER[$i]=0
+    F_ACTIVE[$i]=1
+}
+
+for ((i=0; i<NUM_FLAKES; i++)); do
+    init_flake "$i"
+    F_Y[$i]=$(( RANDOM % (LINES / 2 + 1) + 1 ))
+done
+
+draw_help() {
+    local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+    local start_x=$(( (COLUMNS - MENU_WIDTH) / 2 + 1 ))
+    local row
+
+    for ((row=0; row<MENU_HEIGHT; row++)); do
+        printf '\e[%d;%dH\e[48;5;17m\e[38;5;255m%-*s' \
+            "$((start_y + row))" "$start_x" "$MENU_WIDTH" ""
+    done
+    printf '\e[%d;%dH  +--- Snowfall Help -----------+' "$start_y" "$start_x"
+    printf '\e[%d;%dH  | h : Toggle help             |' "$((start_y + 1))" "$start_x"
+    printf '\e[%d;%dH  | q : Quit                    |' "$((start_y + 2))" "$start_x"
+    printf '\e[%d;%dH  | t : Terminal                |' "$((start_y + 3))" "$start_x"
+    printf '\e[%d;%dH  | v : Vim                     |' "$((start_y + 4))" "$start_x"
+    printf '\e[%d;%dH  | ? : Ask a question          |' "$((start_y + 5))" "$start_x"
+    printf '\e[%d;%dH  +----------------------------+' "$((start_y + 6))" "$start_x"
+    printf '\e[0m'
+}
+
+redraw_scene() {
+    local key fx fy fcolor fchar i
+    draw_background
+    for key in "${!FLOOR[@]}"; do
+        IFS=',' read -r fx fy <<< "$key"
+        IFS=':' read -r fcolor fchar <<< "${FLOOR[$key]}"
+        if ! menu_contains "$fx" "$fy"; then
+            draw_cell "$fx" "$fy" "$fcolor" "$fchar"
+        fi
+    done
+    for ((i=0; i<NUM_FLAKES; i++)); do
+        if (( F_ACTIVE[i] )) && ! menu_contains "${F_X[$i]}" "${F_Y[$i]}"; then
+            draw_cell "${F_X[$i]}" "${F_Y[$i]}" "${F_COLOR[$i]}" "${F_CHAR[$i]}"
+        fi
+    done
+    (( SHOW_HELP )) && draw_help
+}
+
+ask_question() {
+    local question question_json
+
+    printf '\e[?25h\e[0m\e[2J\e[H'
+    printf 'This will send only the text you enter to https://tsd.wtf/q.\n'
+    printf 'The server can see your IP address from the network connection.\n'
+    printf 'Press Enter on an empty prompt to cancel.\n\n'
+    stty echo icanon
+    if ! IFS= read -r -p "Question: " question; then
+        printf '\nCould not read the question.\n'
+    elif [[ -z $question ]]; then
+        printf 'Cancelled.\n'
+    elif ! command -v jq >/dev/null 2>&1; then
+        printf 'Cannot send the question: jq is required to encode the JSON body.\n'
+    elif question_json=$(jq -cn --arg text "$question" '{text: $text}'); then
+        if curl --fail --silent --show-error --output /dev/null \
+            --header 'Content-Type: application/json' \
+            --data-binary "$question_json" https://tsd.wtf/q; then
+            printf 'Question sent.\n'
+        else
+            printf 'Question was not sent.\n'
+        fi
+    else
+        printf 'Cannot send the question: failed to encode the JSON body.\n'
+    fi
+    printf '\nPress Enter'
+    IFS= read -r _
+    stty -echo -icanon min 0 time 0 2>/dev/null
+    printf '\e[?25l'
+    redraw_scene
+}
+
+remove_flake_at() {
+    local mouse_x=$1 mouse_y=$2 i key flake_x floor_x floor_y
+    for ((i=0; i<NUM_FLAKES; i++)); do
+        (( F_ACTIVE[i] )) || continue
+        if (( F_Y[i] == mouse_y && F_X[i] == mouse_x )); then
+            F_ACTIVE[$i]=0
+            draw_cell "$mouse_x" "$mouse_y" 255 " "
+            return
+        fi
+    done
+    for key in "${!FLOOR[@]}"; do
+        IFS=',' read -r floor_x floor_y <<< "$key"
+        if (( floor_y == mouse_y && floor_x == mouse_x )); then
+            unset 'FLOOR[$key]'
+            draw_cell "$floor_x" "$floor_y" 255 " "
+            return
+        fi
+    done
+}
+
+draw_background
+sweep_col=1
+frame_count=0
+
+while true; do
+    get_termsize
+    (( frame_count++ ))
+
+    key=
+    read -t 0.04 -n 1 key 2>/dev/null
+    if [[ $key == $'\e' ]]; then
+        mouse_sequence=
+        mouse_regex='^\[<([0-9]+);([0-9]+);([0-9]+)[Mm]$'
+        while IFS= read -r -s -t 0.1 -N 1 mouse_char 2>/dev/null; do
+            mouse_sequence+=$mouse_char
+            [[ $mouse_char == M || $mouse_char == m ]] && break
+        done
+        if [[ $mouse_sequence =~ $mouse_regex ]]; then
+            mouse_button=${BASH_REMATCH[1]}
+            mouse_x=${BASH_REMATCH[2]}
+            mouse_y=${BASH_REMATCH[3]}
+            if (( mouse_button == 0 )); then
+                if menu_contains "$mouse_x" "$mouse_y"; then
+                    menu_start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
+                    case "$mouse_y" in
+                        $((menu_start_y + 1))) key=h ;;
+                        $((menu_start_y + 2))) key=q ;;
+                        $((menu_start_y + 3))) key=t ;;
+                        $((menu_start_y + 4))) key=v ;;
+                        $((menu_start_y + 5))) key='?' ;;
+                    esac
+                else
+                    remove_flake_at "$mouse_x" "$mouse_y"
+                fi
+            fi
+        fi
+        key=
+    fi
+
+    case "$key" in
+        q|Q) break ;;
+        t|T) exit 2 ;;
+        v|V) exit 3 ;;
+        \?) ask_question ;;
+        h|H)
+            SHOW_HELP=$(( 1 - SHOW_HELP ))
+            redraw_scene
+            ;;
+    esac
+
+    if (( frame_count % 3 == 0 )); then
+        if [[ -n "${FLOOR["$sweep_col,$LINES"]}" ]]; then
+            unset 'FLOOR[$sweep_col,$LINES]'
+            if ! menu_contains "$sweep_col" "$LINES"; then
+                draw_cell "$sweep_col" "$LINES" 255 " "
+            fi
+            for ((row=LINES-1; row>=1; row--)); do
+                if [[ -n "${FLOOR["$sweep_col,$row"]}" ]]; then
+                    value=${FLOOR["$sweep_col,$row"]}
+                    unset 'FLOOR[$sweep_col,$row]'
+                    if ! menu_contains "$sweep_col" "$row"; then
+                        draw_cell "$sweep_col" "$row" 255 " "
+                    fi
+                    target_row=$(( row + 1 ))
+                    FLOOR["$sweep_col,$target_row"]=$value
+                    IFS=':' read -r fcolor fchar <<< "$value"
+                    if ! menu_contains "$sweep_col" "$target_row"; then
+                        draw_cell "$sweep_col" "$target_row" "$fcolor" "$fchar"
+                    fi
+                fi
+            done
+        fi
+        (( sweep_col++ ))
+        (( sweep_col > COLUMNS )) && sweep_col=1
+    fi
+
+    for ((i=0; i<NUM_FLAKES; i++)); do
+        (( F_ACTIVE[i] )) || continue
+        (( F_COUNTER[i]++ ))
+        (( F_COUNTER[i] < F_DELAY[i] )) && continue
+        F_COUNTER[$i]=0
+
+        old_y=${F_Y[$i]}
+        old_x=${F_X[$i]}
+        if ! menu_contains "$old_x" "$old_y"; then
+            draw_cell "$old_x" "$old_y" 255 " "
+        fi
+
+        new_y=$(( old_y + (RANDOM % 4 == 0 ? 1 : 0) ))
+        new_x=$(( old_x + RANDOM % 3 - 1 ))
+        (( new_x < 1 )) && new_x=1
+        (( new_x > COLUMNS )) && new_x=$COLUMNS
+
+        if (( new_y >= LINES )) || [[ -n "${FLOOR["$new_x,$new_y"]}" ]]; then
+            FLOOR["$old_x,$old_y"]="${F_COLOR[$i]}:${F_CHAR[$i]}"
+            if ! menu_contains "$old_x" "$old_y"; then
+                draw_cell "$old_x" "$old_y" "${F_COLOR[$i]}" "${F_CHAR[$i]}"
+            fi
+            init_flake "$i"
+        else
+            F_Y[$i]=$new_y
+            F_X[$i]=$new_x
+            F_CHAR[$i]=${SNOWFLAKES[$(( RANDOM % ${#SNOWFLAKES[@]} ))]}
+            if ! menu_contains "$new_x" "$new_y"; then
+                draw_cell "$new_x" "$new_y" "${F_COLOR[$i]}" "${F_CHAR[$i]}"
+            fi
+        fi
+    done
+
+    (( SHOW_HELP )) && draw_help
+done
