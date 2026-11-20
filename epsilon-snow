@@ -13,7 +13,13 @@ printf "\e[?1000h\e[?1006h\e[?25l"
 
 SNOWFLAKES=("❄" "❅" "❆")
 SNOW_COLORS=(255 159 153 117 195)
-BACKGROUND_COLORS=(19 18 17 16 0)
+BACKGROUND_COLORS=(17 18 19 16 0)
+SNOWMAN_ARTS=(
+    $' __|¨¨¨|__ \n  ( ° ° )  \n  /  :  \\  \n (   :   ) \n❄❄❄❄❄❄❄❄❄'
+    $'   .-.-.   \n  ( o o )  \n  -| ^ |-  \n  (  -  )  \n❄❄❄❄❄❄❄❄❄'
+    $'   _===_   \n   (o.o)   \n   ( : )   \n   ( : )   \n❄❄❄❄❄❄❄❄❄'
+)
+SNOWMAN_WIDTH=16
 NUM_FLAKES=35
 MENU_WIDTH=34
 MENU_HEIGHT=7
@@ -50,6 +56,52 @@ draw_cell() {
         "$y" "$x" "$bg" "$foreground" "$character"
 }
 
+maybe_spawn_snowmen() {
+    local key flake_x flake_y trigger_y=$(( LINES - 5 ))
+    local candidate_x collision i existing_x
+    (( LINES < 6 || COLUMNS < SNOWMAN_WIDTH )) && return
+    for key in "${!FLOOR[@]}"; do
+        IFS=',' read -r flake_x flake_y <<< "$key"
+        if (( flake_y == trigger_y )) && [[ -z ${SNOWMAN_TRIGGERED[$flake_x]+x} ]]; then
+            SNOWMAN_TRIGGERED[$flake_x]=1
+            candidate_x=$(( flake_x - SNOWMAN_WIDTH / 2 ))
+            (( candidate_x < 1 )) && candidate_x=1
+            (( candidate_x > COLUMNS - SNOWMAN_WIDTH + 1 )) &&
+                candidate_x=$(( COLUMNS - SNOWMAN_WIDTH + 1 ))
+            collision=0
+            for ((i=0; i<${#SNOWMAN_XS[@]}; i++)); do
+                existing_x=${SNOWMAN_XS[$i]}
+                if (( candidate_x < existing_x + SNOWMAN_WIDTH &&
+                    candidate_x + SNOWMAN_WIDTH > existing_x )); then
+                    collision=1
+                    break
+                fi
+            done
+            if (( ! collision )); then
+                SNOWMAN_XS+=("$candidate_x")
+                SNOWMAN_STYLES+=("$(( RANDOM % ${#SNOWMAN_ARTS[@]} ))")
+            fi
+        fi
+    done
+}
+
+draw_snowman() {
+    local i j y bg style
+    local -a lines
+    (( LINES >= 6 )) || return
+    for ((i=0; i<${#SNOWMAN_XS[@]}; i++)); do
+        style=${SNOWMAN_STYLES[$i]}
+        mapfile -t lines <<< "${SNOWMAN_ARTS[$style]}"
+        for ((j=0; j<${#lines[@]}; j++)); do
+            y=$(( LINES - 5 + j ))
+            (( y > LINES )) && break
+            bg=$(background_for_row "$y")
+            printf '\e[%d;%dH\e[48;5;%dm\e[38;5;255m%s\e[0m' \
+                "$y" "${SNOWMAN_XS[$i]}" "$bg" "${lines[$j]}"
+        done
+    done
+}
+
 menu_contains() {
     local x=$1 y=$2
     local start_y=$(( (LINES - MENU_HEIGHT) / 2 + 1 ))
@@ -60,6 +112,17 @@ menu_contains() {
 
 declare -a F_Y F_X F_CHAR F_COLOR F_DELAY F_COUNTER F_ACTIVE
 declare -A FLOOR
+declare -a SNOWMAN_XS SNOWMAN_STYLES
+declare -A SNOWMAN_TRIGGERED
+
+pile_reached_top() {
+    local key floor_x floor_y
+    for key in "${!FLOOR[@]}"; do
+        IFS=',' read -r floor_x floor_y <<< "$key"
+        (( floor_y <= 1 )) && return 0
+    done
+    return 1
+}
 
 init_flake() {
     local i=$1
@@ -111,6 +174,7 @@ redraw_scene() {
             draw_cell "${F_X[$i]}" "${F_Y[$i]}" "${F_COLOR[$i]}" "${F_CHAR[$i]}"
         fi
     done
+    draw_snowman
     (( SHOW_HELP )) && draw_help
 }
 
@@ -275,5 +339,11 @@ while true; do
         fi
     done
 
+    if pile_reached_top; then
+        exit 7
+    fi
+
+    maybe_spawn_snowmen
+    draw_snowman
     (( SHOW_HELP )) && draw_help
 done
